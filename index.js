@@ -109,60 +109,12 @@ function filterObject(originalObj, whiteList, initialFilter) {
     return fieldsSet?obj:undefined;
 }
 
-//
-// ### function errorLogger(options)
-// #### @options {Object} options to initialize the middleware.
-//
 
-
-exports.errorLogger = function errorLogger(options) {
-
-    ensureValidOptions(options);
-
-    options.requestWhitelist = options.requestWhitelist || exports.requestWhitelist;
-    options.requestFilter = options.requestFilter || exports.defaultRequestFilter;
-    options.winstonInstance = options.winstonInstance || (new winston.Logger ({ transports: options.transports }));
-    options.msg = options.msg || 'middlewareError';
-    options.baseMeta = options.baseMeta || {};
-    options.metaField = options.metaField || null;
-
-    // Using mustache style templating
-    var template = _.template(options.msg, {
-      interpolate: /\{\{(.+?)\}\}/g
-    });
-
-    return function (err, req, res, next) {
-
-        // Let winston gather all the error data.
-        var exceptionMeta = winston.exception.getAllInfo(err) || {};
-        exceptionMeta.req = filterObject(req, options.requestWhitelist, options.requestFilter);
-
-        if (options.metaField) {
-            var newMeta = {};
-            newMeta[options.metaField] = exceptionMeta;
-            exceptionMeta = newMeta;
-        }
-
-        exceptionMeta = _.extend(exceptionMeta, options.baseMeta);
-
-        // This is fire and forget, we don't want logging to hold up the request so don't wait for the callback
-        options.winstonInstance.log('error', template({err: err, req: req, res: res}), exceptionMeta);
-
-        next(err);
-    };
-};
-
-//
-// ### function logger(options)
-// #### @options {Object} options to initialize the middleware.
-//
-
-
-exports.logger = function logger(options) {
-
-    ensureValidOptions(options);
-    ensureValidLoggerOptions(options);
-
+/**
+ * Handle route and prints log message 
+ * @return void
+ */
+function handleRoute(options, err, req, res, next) {
     options.requestWhitelist = options.requestWhitelist || exports.requestWhitelist;
     options.bodyWhitelist = options.bodyWhitelist || exports.bodyWhitelist;
     options.bodyBlacklist = options.bodyBlacklist || exports.bodyBlacklist;
@@ -173,7 +125,8 @@ exports.logger = function logger(options) {
     options.winstonInstance = options.winstonInstance || (new winston.Logger ({ transports: options.transports }));
     options.level = options.level || "info";
     options.statusLevels = options.statusLevels || false;
-    options.msg = options.msg || "HTTP {{req.method}} {{req.url}}";
+    options.msg = options.msg || (err ? "middlewareError" : "HTTP {{req.method}} {{req.url}}");
+    options.meta = options.meta || false;
     options.baseMeta = options.baseMeta || {};
     options.metaField = options.metaField || null;
     options.colorize = options.colorize || false;
@@ -182,123 +135,154 @@ exports.logger = function logger(options) {
     options.ignoreRoute = options.ignoreRoute || function () { return false; };
     options.skip = options.skip || exports.defaultSkip;
 
-    return function (req, res, next) {
-        var currentUrl = req.originalUrl || req.url;
-        if (currentUrl && _.includes(options.ignoredRoutes, currentUrl)) return next();
-        if (options.ignoreRoute(req, res)) return next();
+    var currentUrl = req.originalUrl || req.url;
+    if (currentUrl && _.includes(options.ignoredRoutes, currentUrl)) return next();
+    if (options.ignoreRoute(req, res)) return next();
 
-        var _routeWhitelists = {
-            req: [],
-            res: [],
-            body: []
+    var _routeWhitelists = {
+        req: [],
+        res: [],
+        body: []
+    };
+
+    var _routeBlacklists = {
+        body: []
+    };
+
+    var requestWhitelist = options.requestWhitelist.concat(_routeWhitelists.req || []);
+    var responseWhitelist = options.responseWhitelist.concat(_routeWhitelists.res || []);
+
+    req._startTime = new Date;
+
+    // Manage to get information from the response too, just like Connect.logger does:
+    var end = res.end;
+    res.end = function(chunk, encoding) {
+        res.responseTime = (new Date) - req._startTime;
+
+        var logData = {};
+        logData.req = filterObject(req, requestWhitelist, options.requestFilter) || {};
+        logData.res = filterObject(res, responseWhitelist, options.responseFilter) || {};
+        logData.err = err;
+
+        logData.res.responseTime = res.responseTime;
+        logData.req.url = req.originalUrl || req.url;
+
+        res.end = end;
+        res.end(chunk, encoding);
+
+        if (options.statusLevels) {
+            if (res.statusCode >= 100) { options.level = options.statusLevels.success || "info"; }
+            if (res.statusCode >= 400) { options.level = options.statusLevels.warn || "warn"; }
+            if (res.statusCode >= 500) { options.level = options.statusLevels.error || "error"; }
         };
 
-        var _routeBlacklists = {
-            body: []
-        };
+        if (options.colorize || options.colorStatus) {
+            // Palette from https://github.com/expressjs/morgan/blob/master/index.js#L205
+            var colorStatus = 'green';
+            if (res.statusCode >= 500) colorStatus = 'red';
+            else if (res.statusCode >= 400) colorStatus = 'yellow';
+            else if (res.statusCode >= 300) colorStatus = 'cyan';
+            logData.res.statusCode = chalk[colorStatus](res.statusCode);
+        }
 
-        var requestWhitelist = options.requestWhitelist.concat(_routeWhitelists.req || []);
-        var responseWhitelist = options.responseWhitelist.concat(_routeWhitelists.res || []);
+        // if (_.includes(responseWhitelist, 'body')) {
+            if (chunk) {
+            var isJson = (res._headers && res._headers['content-type']
+                && res._headers['content-type'].indexOf('json') >= 0);
 
-        req._startTime = new Date;
-
-        // Manage to get information from the response too, just like Connect.logger does:
-        var end = res.end;
-        res.end = function(chunk, encoding) {
-            res.responseTime = (new Date) - req._startTime;
-
-            var logData = {};
-            logData.req = filterObject(req, requestWhitelist, options.requestFilter) || {};
-            logData.res = filterObject(res, responseWhitelist, options.responseFilter) || {};
-
-            logData.res.responseTime = res.responseTime;
-            logData.req.url = req.originalUrl || req.url;
-
-            res.end = end;
-            res.end(chunk, encoding);
-
-            if (options.statusLevels) {
-              if (res.statusCode >= 100) { options.level = options.statusLevels.success || "info"; }
-              if (res.statusCode >= 400) { options.level = options.statusLevels.warn || "warn"; }
-              if (res.statusCode >= 500) { options.level = options.statusLevels.error || "error"; }
-            };
-
-            if (options.colorize || options.colorStatus) {
-              // Palette from https://github.com/expressjs/morgan/blob/master/index.js#L205
-              var colorStatus = 'green';
-              if (res.statusCode >= 500) colorStatus = 'red';
-              else if (res.statusCode >= 400) colorStatus = 'yellow';
-              else if (res.statusCode >= 300) colorStatus = 'cyan';
-              logData.res.statusCode = chalk[colorStatus](res.statusCode);
-            }
-
-            // if (_.includes(responseWhitelist, 'body')) {
-              if (chunk) {
-                var isJson = (res._headers && res._headers['content-type']
-                  && res._headers['content-type'].indexOf('json') >= 0);
-
-                if(isJson) {
-                  if(chunk instanceof Buffer) {
-                    logData.res.body = JSONB.parse(chunk);
-                  } else {
-                    logData.res.body = JSON.parse(chunk);
-                  }
+            if(isJson) {
+                if(chunk instanceof Buffer) {
+                logData.res.body = JSONB.parse(chunk);
                 } else {
-                  logData.res.body =  chunk.toString();
+                logData.res.body = JSON.parse(chunk);
                 }
-              }
-            // }
-
-            var bodyWhitelist = _.union(options.bodyWhitelist, (_routeWhitelists.body || []));
-            var blacklist = _.union(options.bodyBlacklist, (_routeBlacklists.body || []));
-
-            var filteredBody = null;
-
-            if ( req.body !== undefined ) {
-                if (blacklist.length > 0 && bodyWhitelist.length === 0) {
-                  var whitelist = _.difference(Object.keys(req.body), blacklist);
-                  filteredBody = filterObject(req.body, whitelist, options.requestFilter);
-                } else {
-                  filteredBody = filterObject(req.body, bodyWhitelist, options.requestFilter);
-                }
+            } else {
+                logData.res.body =  chunk.toString();
             }
-
-            if (filteredBody) logData.req.body = filteredBody;
-
-            var meta = {};
-
-            if(options.meta !== false) {
-              if (options.metaField) {
-                  var newMeta = {}
-                  newMeta[options.metaField] = logData;
-                  // logData = newMeta;
-              }
-              meta = _.extend(meta, logData);
             }
+        // }
 
+        var bodyWhitelist = _.union(options.bodyWhitelist, (_routeWhitelists.body || []));
+        var blacklist = _.union(options.bodyBlacklist, (_routeBlacklists.body || []));
+
+        var filteredBody = null;
+
+        if ( req.body !== undefined ) {
+            if (blacklist.length > 0 && bodyWhitelist.length === 0) {
+                var whitelist = _.difference(Object.keys(req.body), blacklist);
+                filteredBody = filterObject(req.body, whitelist, options.requestFilter);
+            } else {
+                filteredBody = filterObject(req.body, bodyWhitelist, options.requestFilter);
+            }
+        }
+
+        if (filteredBody) logData.req.body = filteredBody;
+
+        var meta = {};
+        if(options.meta !== false) {
             meta = _.extend(meta, options.baseMeta);
 
-
-            var msgFormat = !options.expressFormat ? options.msg : "{{req.method}} {{req.url}} {{res.statusCode}} {{res.responseTime}}ms";
-
-            // Using mustache style templating
-            var template = _.template(msgFormat, {
-              interpolate: /\{\{(.+?)\}\}/g
-            });
-
-            var msg = template({req: logData.req, res: logData.res});
-
-            if(options.colorize) {
-              msg = chalk.grey(msg);
+            if(err) {
+                meta = _.extend(meta, winston.exception.getAllInfo(err) || {});
             }
 
-            // This is fire and forget, we don't want logging to hold up the request so don't wait for the callback
-            if (!options.skip(req, res)) {
-              options.winstonInstance.log(options.level, msg, meta);
+            if (options.metaField) {
+                var newMeta = {}
+                newMeta[options.metaField] = meta;
+                meta = newMeta;
             }
-        };
+        }
 
+
+        var msgFormat = !options.expressFormat ? options.msg : "{{req.method}} {{req.url}} {{res.statusCode}} {{res.responseTime}}ms";
+
+        // Using mustache style templating
+        var template = _.template(msgFormat, {
+            interpolate: /\{\{(.+?)\}\}/g
+        });
+
+        var msg = template({err: logData.err, req: logData.req, res: logData.res});
+
+        if(options.colorize) {
+            msg = chalk.grey(msg);
+        }
+
+        // This is fire and forget, we don't want logging to hold up the request so don't wait for the callback
+        if (!options.skip(req, res)) {
+            options.winstonInstance.log(options.level, msg, meta);
+        }
+    };
+    
+    if (err) {
+        next(err) 
+    } else { 
         next();
+    }
+}
+
+
+//
+// ### function errorLogger(options)
+// #### @options {Object} options to initialize the middleware.
+//
+exports.errorLogger = function errorLogger(options) {
+    ensureValidOptions(options);
+
+    return function (err, req, res, next) {
+        return handleRoute(options, err, req, res, next);
+    };
+};
+
+//
+// ### function logger(options)
+// #### @options {Object} options to initialize the middleware.
+//
+exports.logger = function logger(options) {
+    ensureValidOptions(options);
+    ensureValidLoggerOptions(options);
+
+    return function (req, res, next) {
+        return handleRoute(options, null, req, res, next);
     };
 };
 
