@@ -233,6 +233,7 @@ function handleRoute(options, err, req, res, next) {
             }
         }
         meta.elapsed = res.responseTime;            // Add responseTime to the meta.elapsed object
+        meta.method = req._parsedUrl.pathname;
         
 
         var msgFormat = !options.expressFormat ? options.msg : "{{req.method}} {{req.url}} {{res.statusCode}} {{res.responseTime}}ms";
