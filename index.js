@@ -248,6 +248,8 @@ function handleRoute(options, err, req, res, next) {
         if(options.colorize) {
             msg = chalk.grey(msg);
         }
+        
+        msg.type = "express";
 
         // This is fire and forget, we don't want logging to hold up the request so don't wait for the callback
         if (!options.skip(req, res)) {
