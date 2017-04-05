@@ -8,8 +8,6 @@ npm-debug.log
 ## Jetbrains
 #################
 .idea
-.idea/
-.idea/**.**
 
 #################
 ## Misc
@@ -17,3 +15,4 @@ npm-debug.log
 .DS_Store
 lib/.DS_Store
 coverage.html
+express-winston.iml
