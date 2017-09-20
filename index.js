@@ -246,7 +246,7 @@ function handleRoute(options, err, req, res, next) {
 			}
 		}
 		meta.elapsed = res.responseTime;            // Add responseTime to the meta.elapsed object
-		meta.method     = req.baseUrl.replace("/api", "") + req._parsedUrl.pathname.replace(/[A-z0-9]{24}/g, "ObjectID").replace(/[0-9]{6}/g, "AccountID");
+		meta.method     = req._parsedUrl.pathname.replace(/[A-z0-9]{24}/g, "ObjectID").replace("/api", "").replace(/^\/v[0-9]*\//, "");
 		meta.statusCode = res.statusCode;
 
 		var msgFormat = !options.expressFormat ? options.msg : "{{req.method}} {{req.url}} {{res.statusCode}} {{res.responseTime}}ms";
